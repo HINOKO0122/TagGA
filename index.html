@@ -2,24 +2,26 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>GA Tag Simulation - Fixed Controls</title>
+    <title>GA Tag Simulation - Mode Switch</title>
     <style>
         body { background: #222; color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; overflow: hidden; }
         .controls { padding: 20px; text-align: center; background: #333; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); z-index: 10; }
         #container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 20px; overflow-y: auto; max-height: 80vh; }
         canvas { background: #000; border: 1px solid #555; width: 150px; height: 150px; }
         button { cursor: pointer; padding: 8px 15px; margin: 5px; background: #444; color: white; border: 1px solid #666; border-radius: 4px; }
-        button:focus { outline: none; } /* フォーカス枠を消す */
+        button:focus { outline: none; }
         #info { font-size: 1.2em; margin: 10px; font-family: monospace; color: #0f0; }
+        .active-btn { background: #060; border-color: #0f0; } /* 参戦中のボタン強調 */
     </style>
 </head>
 <body>
     <div class="controls">
-        <h1>GA 鬼ごっこ (操作修正 & 位置ランダム版)</h1>
+        <h1>GA 鬼ごっこ (モード切替版)</h1>
         <div id="info">世代: 0 | 待機中</div>
         <button id="startBtn">リセットして開始</button>
         <button id="playerChaserBtn">鬼として参戦</button>
         <button id="playerEvaderBtn">逃走者として参戦</button>
+        <button id="cancelPlayerBtn" style="background: #622;">参戦解除 (AIに戻す)</button>
     </div>
     <div id="container"></div>
 
@@ -30,6 +32,10 @@
     const FPS = 30;
     const TOTAL_FRAMES = DURATION_SEC * FPS;
     const DNA_LENGTH = 10 * 4; 
+
+    // グローバルな状態管理
+    let isPlayerMode = false;
+    let playerRole = null;
 
     class Agent {
         constructor(x, y, dna) {
@@ -45,20 +51,17 @@
     }
 
     class Simulation {
-        constructor(container, chaserDNA, evaderDNA) {
+        constructor(container, chaserDNA, evaderDNA, isMain = false) {
             this.canvas = document.createElement('canvas');
             this.canvas.width = ROOM_SIZE;
             this.canvas.height = ROOM_SIZE;
             container.appendChild(this.canvas);
             this.ctx = this.canvas.getContext('2d');
+            this.isMain = isMain; // プレイヤーが操作する可能性がある部屋か
             
-            // --- 柔軟性を高めるため初期位置をランダムに ---
             this.chaser = new Agent(Math.random()*180+10, Math.random()*180+10, chaserDNA);
             this.evader = new Agent(Math.random()*180+10, Math.random()*180+10, evaderDNA);
-            
             this.frame = 0;
-            this.isPlayerMode = false;
-            this.playerRole = null;
         }
 
         update(keys) {
@@ -71,20 +74,19 @@
 
                 ent.warpLines = ent.warpLines.filter(line => { line.life--; return line.life > 0; });
 
-                if (this.isPlayerMode && this.playerRole === (isChaser ? 'chaser' : 'evader')) {
+                // プレイヤー操作の判定
+                if (this.isMain && isPlayerMode && playerRole === (isChaser ? 'chaser' : 'evader')) {
                     if (keys.has('arrowright') || keys.has('d')) moveCmd.newDir = 0;
                     else if (keys.has('arrowdown') || keys.has('s')) moveCmd.newDir = 1;
                     else if (keys.has('arrowleft') || keys.has('a')) moveCmd.newDir = 2;
                     else if (keys.has('arrowup') || keys.has('w')) moveCmd.newDir = 3;
                     if (keys.has(' ')) moveCmd.warp = true;
                 } else {
+                    // AI操作
                     const dirFlags = [0,0,0,0]; dirFlags[ent.dirIndex] = 1;
                     const inputs = [
-                        ent.x/200, ent.y/200, 
-                        target.x/200, target.y/200, 
-                        ...dirFlags,
-                        ent.warpCooldown === 0 ? 1 : 0,
-                        (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES
+                        ent.x/200, ent.y/200, target.x/200, target.y/200, 
+                        ...dirFlags, ent.warpCooldown === 0 ? 1 : 0, (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES
                     ];
                     let outputs = [0, 0, 0, 0];
                     for(let i=0; i<4; i++) {
@@ -96,7 +98,6 @@
 
                 ent.dirIndex = moveCmd.newDir;
                 const speed = 5;
-                
                 if (moveCmd.warp && ent.warpCooldown === 0) {
                     const oldX = ent.x; const oldY = ent.y;
                     ent.x += Math.cos(ent.angle) * 60;
@@ -107,7 +108,6 @@
                     ent.x += Math.cos(ent.angle) * speed;
                     ent.y += Math.sin(ent.angle) * speed;
                 }
-
                 ent.x = Math.max(5, Math.min(ROOM_SIZE-5, ent.x));
                 ent.y = Math.max(5, Math.min(ROOM_SIZE-5, ent.y));
                 if (ent.warpCooldown > 0) ent.warpCooldown--;
@@ -132,6 +132,12 @@
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, ROOM_SIZE, ROOM_SIZE);
 
+            if (this.isMain && isPlayerMode) {
+                ctx.strokeStyle = playerRole === 'chaser' ? 'red' : '#0ff';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(0, 0, ROOM_SIZE, ROOM_SIZE);
+            }
+
             [this.chaser, this.evader].forEach((ent, idx) => {
                 const color = idx === 0 ? '#ff4444' : '#00ffff';
                 ent.warpLines.forEach(line => {
@@ -150,7 +156,8 @@
                 ctx.restore();
             });
             if (!this.chaser.isAlive) {
-                ctx.strokeStyle = 'white';
+                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                ctx.lineWidth = 1;
                 ctx.strokeRect(0,0, ROOM_SIZE, ROOM_SIZE);
             }
         }
@@ -162,7 +169,6 @@
     const container = document.getElementById('container');
     const infoDisp = document.getElementById('info');
 
-    // スペースキーでスクロールしないように制御
     window.addEventListener('keydown', e => {
         if (e.key === ' ') e.preventDefault();
         keys.add(e.key.toLowerCase());
@@ -183,14 +189,14 @@
                 nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.4 - 0.2)));
             }
             generation++;
-        } else {
+        } else if (isNew) {
             generation = 1;
         }
 
         container.innerHTML = '';
         simulations = [];
         for (let i = 0; i < SIM_COUNT; i++) {
-            simulations.push(new Simulation(container, nextChaserDNAs[i], nextEvaderDNAs[i]));
+            simulations.push(new Simulation(container, nextChaserDNAs[i], nextEvaderDNAs[i], i === 0));
         }
     }
 
@@ -198,32 +204,37 @@
         if (simulations.length > 0) {
             simulations.forEach(sim => sim.update(keys));
             const main = simulations[0];
-            infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s`;
+            infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s ${isPlayerMode ? '(参戦中)' : ''}`;
+            
             if (simulations.every(s => s.frame >= TOTAL_FRAMES || !s.chaser.isAlive)) {
-                if (!simulations[0].isPlayerMode) startGeneration();
-                else infoDisp.innerText = `世代: ${generation} | 終了 (リセットで再開)`;
+                startGeneration(); // 参戦中であっても、終われば次の世代へ自動移行
             }
         }
         requestAnimationFrame(loop);
     }
 
-    // ボタンクリック時にフォーカスを外す処理を追加
     document.querySelectorAll('button').forEach(btn => {
         btn.addEventListener('click', () => btn.blur());
     });
 
-    document.getElementById('startBtn').onclick = () => startGeneration(true);
-    document.getElementById('playerChaserBtn').onclick = () => {
-        startGeneration(false);
-        simulations[0].isPlayerMode = true;
-        simulations[0].playerRole = 'chaser';
-        simulations[0].canvas.style.outline = "3px solid red";
+    document.getElementById('startBtn').onclick = () => {
+        isPlayerMode = false;
+        startGeneration(true);
     };
+
+    document.getElementById('playerChaserBtn').onclick = () => {
+        isPlayerMode = true;
+        playerRole = 'chaser';
+    };
+
     document.getElementById('playerEvaderBtn').onclick = () => {
-        startGeneration(false);
-        simulations[0].isPlayerMode = true;
-        simulations[0].playerRole = 'evader';
-        simulations[0].canvas.style.outline = "3px solid #0ff";
+        isPlayerMode = true;
+        playerRole = 'evader';
+    };
+
+    document.getElementById('cancelPlayerBtn').onclick = () => {
+        isPlayerMode = false;
+        playerRole = null;
     };
 
     startGeneration(true);
