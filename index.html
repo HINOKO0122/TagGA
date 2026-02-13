@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>GA Tag Simulation - High Warp Version</title>
+    <title>GA Tag Simulation - 4-Direction Grid Mode</title>
     <style>
         body { background: #222; color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; }
         .controls { padding: 20px; text-align: center; background: #333; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
@@ -16,16 +16,12 @@
 </head>
 <body>
     <div class="controls">
-        <h1>GA 鬼ごっこ (ワープ強化ver)</h1>
+        <h1>GA 鬼ごっこ (上下左右限定ver)</h1>
         <div id="info">世代: 0 | 待機中</div>
         <button id="startBtn">リセットして開始</button>
         <button id="playerChaserBtn">鬼として参戦</button>
         <button id="playerEvaderBtn">逃走者として参戦</button>
-        <div>
-            <input type="text" id="ioField" placeholder="JSONデータ">
-            <button id="exportBtn">データ出力</button>
-            <button id="importBtn">データ読込</button>
-        </div>
+        <p style="font-size: 0.8em; color: #aaa;">操作: 矢印キー または WASD で方向転換 / スペースキーでワープ</p>
     </div>
     <div id="container"></div>
 
@@ -35,18 +31,21 @@
     const DURATION_SEC = 10;
     const FPS = 30;
     const TOTAL_FRAMES = DURATION_SEC * FPS;
-    const DNA_LENGTH = 21; 
+    // DNA入力を調整 (位置x2, 相手位置x2, 向きx4, クールダウンx1, 残り時間x1 = 10入力)
+    const DNA_LENGTH = 10 * 4; 
 
     class Agent {
         constructor(x, y, dna) {
             this.x = x; this.y = y;
-            this.angle = Math.random() * Math.PI * 2;
+            // 0:右, 1:下, 2:左, 3:上
+            this.dirIndex = Math.floor(Math.random() * 4);
             this.warpCooldown = 0;
             this.dna = dna || Array.from({ length: DNA_LENGTH }, () => Math.random() * 2 - 1);
             this.score = 0;
             this.isAlive = true;
-            this.warpLines = []; // ワープ軌跡を複数保持できるように
+            this.warpLines = [];
         }
+        get angle() { return this.dirIndex * (Math.PI / 2); }
     }
 
     class Simulation {
@@ -69,56 +68,59 @@
             [this.chaser, this.evader].forEach((ent, idx) => {
                 const isChaser = idx === 0;
                 const target = isChaser ? this.evader : this.chaser;
-                let moveCmd = { angleVel: 0, warp: false };
+                let moveCmd = { newDir: ent.dirIndex, warp: false };
 
-                // ワープ軌跡の寿命を減らす
-                ent.warpLines = ent.warpLines.filter(line => {
-                    line.life--;
-                    return line.life > 0;
-                });
+                ent.warpLines = ent.warpLines.filter(line => { line.life--; return line.life > 0; });
 
                 if (this.isPlayerMode && this.playerRole === (isChaser ? 'chaser' : 'evader')) {
-                    if (keys.has('a')) moveCmd.angleVel = -0.25;
-                    if (keys.has('d')) moveCmd.angleVel = 0.25;
+                    if (keys.has('arrowright') || keys.has('d')) moveCmd.newDir = 0;
+                    else if (keys.has('arrowdown') || keys.has('s')) moveCmd.newDir = 1;
+                    else if (keys.has('arrowleft') || keys.has('a')) moveCmd.newDir = 2;
+                    else if (keys.has('arrowup') || keys.has('w')) moveCmd.newDir = 3;
                     moveCmd.warp = keys.has(' ');
                 } else {
+                    // AI入力: 自分の位置、相手の位置、現在の向き(One-hot)、ワープ可否、残り時間
+                    const dirFlags = [0,0,0,0]; dirFlags[ent.dirIndex] = 1;
                     const inputs = [
                         ent.x/200, ent.y/200, 
                         target.x/200, target.y/200, 
-                        Math.cos(ent.angle), 
-                        ent.warpCooldown === 0 ? 1 : 0, 
+                        ...dirFlags,
+                        ent.warpCooldown === 0 ? 1 : 0,
                         (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES
                     ];
-                    let outputs = [0, 0, 0];
-                    for(let i=0; i<3; i++) {
-                        for(let j=0; j<7; j++) outputs[i] += inputs[j] * ent.dna[i*7 + j];
+                    
+                    let outputs = [0, 0, 0, 0]; // 0-3: 各方向への重み, 4: ワープ
+                    for(let i=0; i<4; i++) {
+                        for(let j=0; j<10; j++) outputs[i] += inputs[j] * ent.dna[i*10 + j];
                     }
-                    moveCmd.angleVel = Math.max(-0.25, Math.min(0.25, outputs[0]));
-                    // ワープ判定を甘く (0.8 -> 0.5)
-                    moveCmd.warp = outputs[2] > 0.5;
+                    // 最も数値が高い方向を向く
+                    moveCmd.newDir = outputs.indexOf(Math.max(...outputs.slice(0, 4)));
+                    // 4番目の出力をワープ判定に使う（簡易化のため最初のDNAの合計などを利用）
+                    moveCmd.warp = outputs.reduce((a,b)=>a+b) > 2.0; 
                 }
 
-                ent.angle += moveCmd.angleVel;
+                ent.dirIndex = moveCmd.newDir;
+                const speed = 5;
                 
                 if (moveCmd.warp && ent.warpCooldown === 0) {
-                    const oldX = ent.x;
-                    const oldY = ent.y;
-                    ent.x += Math.cos(ent.angle) * 60; // 飛距離アップ
-                    ent.y += Math.sin(ent.angle) * 60;
-                    ent.warpCooldown = 20; // クールダウン短縮
-                    ent.warpLines.push({ x1: oldX, y1: oldY, x2: ent.x, y2: ent.y, life: 30 });
+                    const oldX = ent.x; const oldY = ent.y;
+                    const dist = 60;
+                    ent.x += Math.cos(ent.angle) * dist;
+                    ent.y += Math.sin(ent.angle) * dist;
+                    ent.warpCooldown = 25;
+                    ent.warpLines.push({ x1: oldX, y1: oldY, x2: ent.x, y2: ent.y, life: 20 });
                 } else {
-                    ent.x += Math.cos(ent.angle) * 4.5;
-                    ent.y += Math.sin(ent.angle) * 4.5;
+                    ent.x += Math.cos(ent.angle) * speed;
+                    ent.y += Math.sin(ent.angle) * speed;
                 }
 
-                ent.x = Math.max(0, Math.min(ROOM_SIZE, ent.x));
-                ent.y = Math.max(0, Math.min(ROOM_SIZE, ent.y));
+                ent.x = Math.max(5, Math.min(ROOM_SIZE-5, ent.x));
+                ent.y = Math.max(5, Math.min(ROOM_SIZE-5, ent.y));
                 if (ent.warpCooldown > 0) ent.warpCooldown--;
             });
 
             const dist = Math.hypot(this.chaser.x - this.evader.x, this.chaser.y - this.evader.y);
-            if (dist < 10) {
+            if (dist < 12) {
                 this.chaser.isAlive = false;
                 this.chaser.score = 3000 + (TOTAL_FRAMES - this.frame);
                 this.evader.score = this.frame;
@@ -137,29 +139,32 @@
             ctx.fillRect(0, 0, ROOM_SIZE, ROOM_SIZE);
 
             [this.chaser, this.evader].forEach((ent, idx) => {
-                const color = idx === 0 ? 'red' : '#0ff';
+                const color = idx === 0 ? '#ff4444' : '#00ffff';
+                
                 ent.warpLines.forEach(line => {
                     ctx.beginPath();
-                    ctx.strokeStyle = `rgba(255, 255, 0, ${line.life / 30})`; // 徐々に消える
-                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = `rgba(255, 255, 0, ${line.life / 20})`;
+                    ctx.lineWidth = 3;
                     ctx.moveTo(line.x1, line.y1);
                     ctx.lineTo(line.x2, line.y2);
                     ctx.stroke();
                 });
 
                 ctx.fillStyle = color;
-                ctx.fillRect(ent.x-4, ent.y-4, 8, 8);
-                
-                // ワープ可能時はオーラを表示
+                // 向きがわかるように少し長く描画
+                ctx.save();
+                ctx.translate(ent.x, ent.y);
+                ctx.rotate(ent.angle);
+                ctx.fillRect(-5, -5, 12, 10); // 前方が少し長い
                 if (ent.warpCooldown === 0) {
-                    ctx.strokeStyle = color;
-                    ctx.strokeRect(ent.x-6, ent.y-6, 12, 12);
+                    ctx.strokeStyle = 'white';
+                    ctx.strokeRect(-7, -7, 14, 14);
                 }
+                ctx.restore();
             });
 
             if (!this.chaser.isAlive) {
                 ctx.strokeStyle = 'white';
-                ctx.lineWidth = 1;
                 ctx.strokeRect(0,0, ROOM_SIZE, ROOM_SIZE);
             }
         }
@@ -184,8 +189,8 @@
             for(let i=0; i<SIM_COUNT; i++) {
                 const pC = sortedC[Math.floor(Math.random()*5)].dna;
                 const pE = sortedE[Math.floor(Math.random()*5)].dna;
-                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.4 - 0.2)));
-                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.4 - 0.2)));
+                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.5 - 0.25)));
+                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.5 - 0.25)));
             }
             generation++;
         } else {
@@ -204,10 +209,9 @@
             simulations.forEach(sim => sim.update(keys));
             const main = simulations[0];
             infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s`;
-
             if (simulations.every(s => s.frame >= TOTAL_FRAMES || !s.chaser.isAlive)) {
                 if (!simulations[0].isPlayerMode) startGeneration();
-                else infoDisp.innerText = `世代: ${generation} | ゲーム終了 (リセットで再開)`;
+                else infoDisp.innerText = `世代: ${generation} | 終了`;
             }
         }
         requestAnimationFrame(loop);
@@ -225,21 +229,6 @@
         simulations[0].isPlayerMode = true;
         simulations[0].playerRole = 'evader';
         simulations[0].canvas.style.outline = "2px solid #0ff";
-    };
-    document.getElementById('exportBtn').onclick = () => {
-        if (simulations.length === 0) return;
-        const data = { c: simulations[0].chaser.dna, e: simulations[0].evader.dna };
-        document.getElementById('ioField').value = JSON.stringify(data);
-    };
-    document.getElementById('importBtn').onclick = () => {
-        const val = document.getElementById('ioField').value;
-        if(!val) return;
-        const data = JSON.parse(val);
-        startGeneration(true);
-        simulations.forEach(s => {
-            s.chaser.dna = [...data.c];
-            s.evader.dna = [...data.e];
-        });
     };
 
     startGeneration(true);
