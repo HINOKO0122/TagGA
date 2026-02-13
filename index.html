@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>GA Tag Simulation</title>
+    <title>GA Tag Simulation - Enhanced</title>
     <style>
         body { background: #222; color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; }
         .controls { padding: 20px; text-align: center; background: #333; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
@@ -16,9 +16,9 @@
 </head>
 <body>
     <div class="controls">
-        <h1>GA 鬼ごっこシミュレーター</h1>
+        <h1>GA 鬼ごっこシミュレーター (常時移動ver)</h1>
         <div id="info">世代: 0 | 待機中</div>
-        <button id="startBtn">シミュレーション開始</button>
+        <button id="startBtn">リセットして開始</button>
         <button id="playerChaserBtn">鬼として参戦</button>
         <button id="playerEvaderBtn">逃走者として参戦</button>
         <div>
@@ -30,7 +30,6 @@
     <div id="container"></div>
 
     <script>
-    // --- 定数 ---
     const ROOM_SIZE = 200;
     const SIM_COUNT = 25;
     const DURATION_SEC = 10;
@@ -38,7 +37,6 @@
     const TOTAL_FRAMES = DURATION_SEC * FPS;
     const DNA_LENGTH = 21; 
 
-    // --- クラス定義 ---
     class Agent {
         constructor(x, y, dna) {
             this.x = x; this.y = y;
@@ -47,6 +45,7 @@
             this.dna = dna || Array.from({ length: DNA_LENGTH }, () => Math.random() * 2 - 1);
             this.score = 0;
             this.isAlive = true;
+            this.lastWarp = null; // ワープ軌跡保存用
         }
     }
 
@@ -57,8 +56,8 @@
             this.canvas.height = ROOM_SIZE;
             container.appendChild(this.canvas);
             this.ctx = this.canvas.getContext('2d');
-            this.chaser = new Agent(15, 15, chaserDNA);
-            this.evader = new Agent(185, 185, evaderDNA);
+            this.chaser = new Agent(20, 20, chaserDNA);
+            this.evader = new Agent(180, 180, evaderDNA);
             this.frame = 0;
             this.isPlayerMode = false;
             this.playerRole = null;
@@ -70,32 +69,37 @@
             [this.chaser, this.evader].forEach((ent, idx) => {
                 const isChaser = idx === 0;
                 const target = isChaser ? this.evader : this.chaser;
-                let moveCmd = { angle: 0, move: true, warp: false };
+                let moveCmd = { angleVel: 0, warp: false };
+                ent.lastWarp = null; // 毎フレーム初期化
 
                 if (this.isPlayerMode && this.playerRole === (isChaser ? 'chaser' : 'evader')) {
-                    if (keys.has('a')) ent.angle -= 0.15;
-                    if (keys.has('d')) ent.angle += 0.15;
-                    moveCmd.move = keys.has('w');
+                    if (keys.has('a')) moveCmd.angleVel = -0.2;
+                    if (keys.has('d')) moveCmd.angleVel = 0.2;
                     moveCmd.warp = keys.has(' ');
                 } else {
-                    const inputs = [ent.x/200, ent.y/200, target.x/200, target.y/200, ent.angle/(Math.PI*2), ent.warpCooldown === 0 ? 1 : 0, (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES];
+                    const inputs = [ent.x/200, ent.y/200, target.x/200, target.y/200, Math.cos(ent.angle), ent.warpCooldown === 0 ? 1 : 0, (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES];
                     let outputs = [0, 0, 0];
                     for(let i=0; i<3; i++) {
                         for(let j=0; j<7; j++) outputs[i] += inputs[j] * ent.dna[i*7 + j];
                     }
-                    ent.angle += Math.max(-0.2, Math.min(0.2, outputs[0]));
-                    moveCmd.move = outputs[1] > 0;
+                    moveCmd.angleVel = Math.max(-0.2, Math.min(0.2, outputs[0]));
                     moveCmd.warp = outputs[2] > 0.8;
                 }
 
-                if (moveCmd.move) {
-                    ent.x += Math.cos(ent.angle) * 4;
-                    ent.y += Math.sin(ent.angle) * 4;
-                }
+                // 常時前進（動かない選択肢を消去）
+                ent.angle += moveCmd.angleVel;
+                const speed = 4;
+                
                 if (moveCmd.warp && ent.warpCooldown === 0) {
-                    ent.x += Math.cos(ent.angle) * 40;
-                    ent.y += Math.sin(ent.angle) * 40;
-                    ent.warpCooldown = 45;
+                    const oldX = ent.x;
+                    const oldY = ent.y;
+                    ent.x += Math.cos(ent.angle) * 50;
+                    ent.y += Math.sin(ent.angle) * 50;
+                    ent.warpCooldown = 40;
+                    ent.lastWarp = { x1: oldX, y1: oldY, x2: ent.x, y2: ent.y };
+                } else {
+                    ent.x += Math.cos(ent.angle) * speed;
+                    ent.y += Math.sin(ent.angle) * speed;
                 }
 
                 ent.x = Math.max(0, Math.min(ROOM_SIZE, ent.x));
@@ -121,15 +125,32 @@
             const ctx = this.ctx;
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, ROOM_SIZE, ROOM_SIZE);
+
+            // ワープの道筋を描画
+            [this.chaser, this.evader].forEach(ent => {
+                if (ent.lastWarp) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'yellow';
+                    ctx.lineWidth = 2;
+                    ctx.moveTo(ent.lastWarp.x1, ent.lastWarp.y1);
+                    ctx.lineTo(ent.lastWarp.x2, ent.lastWarp.y2);
+                    ctx.stroke();
+                }
+            });
+
             // 鬼: 赤, 逃げ: 水色
             ctx.fillStyle = 'red';
             ctx.fillRect(this.chaser.x-4, this.chaser.y-4, 8, 8);
             ctx.fillStyle = '#0ff';
             ctx.fillRect(this.evader.x-4, this.evader.y-4, 8, 8);
+
+            if (!this.chaser.isAlive) {
+                ctx.strokeStyle = 'white';
+                ctx.strokeRect(0,0, ROOM_SIZE, ROOM_SIZE);
+            }
         }
     }
 
-    // --- 管理ロジック ---
     let simulations = [];
     let generation = 0;
     const keys = new Set();
@@ -139,21 +160,22 @@
     window.addEventListener('keydown', e => keys.add(e.key.toLowerCase()));
     window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 
-    function startGeneration() {
-        const oldSims = [...simulations];
+    function startGeneration(isNew = false) {
         let nextChaserDNAs = [];
         let nextEvaderDNAs = [];
 
-        if (oldSims.length > 0) {
-            const sortedC = oldSims.map(s => s.chaser).sort((a,b) => b.score - a.score);
-            const sortedE = oldSims.map(s => s.evader).sort((a,b) => b.score - a.score);
+        if (!isNew && simulations.length > 0) {
+            const sortedC = simulations.map(s => s.chaser).sort((a,b) => b.score - a.score);
+            const sortedE = simulations.map(s => s.evader).sort((a,b) => b.score - a.score);
             for(let i=0; i<SIM_COUNT; i++) {
-                // 上位5体からランダムに選び突然変異
                 const pC = sortedC[Math.floor(Math.random()*5)].dna;
                 const pE = sortedE[Math.floor(Math.random()*5)].dna;
-                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.2 - 0.1)));
-                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.2 - 0.1)));
+                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.3 - 0.15)));
+                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.3 - 0.15)));
             }
+            generation++;
+        } else {
+            generation = 1;
         }
 
         container.innerHTML = '';
@@ -161,7 +183,6 @@
         for (let i = 0; i < SIM_COUNT; i++) {
             simulations.push(new Simulation(container, nextChaserDNAs[i], nextEvaderDNAs[i]));
         }
-        generation++;
     }
 
     function loop() {
@@ -171,31 +192,30 @@
             infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s`;
 
             if (simulations.every(s => s.frame >= TOTAL_FRAMES || !s.chaser.isAlive)) {
-                if (!simulations[0].isPlayerMode) startGeneration();
-                else infoDisp.innerText = `世代: ${generation} | ゲーム終了 (再開するには開始ボタン)`;
+                if (!simulations[0].isPlayerMode) {
+                    startGeneration();
+                } else {
+                    infoDisp.innerText = `世代: ${generation} | ゲーム終了 (リセットボタンで再開)`;
+                }
             }
         }
         requestAnimationFrame(loop);
     }
 
-    // ボタンのイベント
-    document.getElementById('startBtn').onclick = () => {
-        generation = 0;
-        startGeneration();
-    };
-
+    document.getElementById('startBtn').onclick = () => startGeneration(true);
+    
     document.getElementById('playerChaserBtn').onclick = () => {
-        startGeneration();
+        startGeneration(false);
         simulations[0].isPlayerMode = true;
         simulations[0].playerRole = 'chaser';
-        simulations[0].canvas.style.border = "2px solid #fff";
+        simulations[0].canvas.style.border = "2px solid red";
     };
 
     document.getElementById('playerEvaderBtn').onclick = () => {
-        startGeneration();
+        startGeneration(false);
         simulations[0].isPlayerMode = true;
         simulations[0].playerRole = 'evader';
-        simulations[0].canvas.style.border = "2px solid #fff";
+        simulations[0].canvas.style.border = "2px solid #0ff";
     };
 
     document.getElementById('exportBtn').onclick = () => {
@@ -208,13 +228,15 @@
         const val = document.getElementById('ioField').value;
         if(!val) return;
         const data = JSON.parse(val);
-        startGeneration();
+        startGeneration(true);
         simulations.forEach(s => {
             s.chaser.dna = [...data.c];
             s.evader.dna = [...data.e];
         });
     };
 
+    // 初期起動
+    startGeneration(true);
     loop();
     </script>
 </body>
