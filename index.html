@@ -3,23 +3,219 @@
 <head>
     <meta charset="UTF-8">
     <title>GA Tag Simulation</title>
-    <link rel="stylesheet" href="style.css">
+    <style>
+        body { background: #222; color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        .controls { padding: 20px; text-align: center; background: #333; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+        #container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 20px; }
+        canvas { background: #000; border: 1px solid #555; width: 150px; height: 150px; }
+        button { cursor: pointer; padding: 8px 15px; margin: 5px; background: #444; color: white; border: 1px solid #666; border-radius: 4px; }
+        button:hover { background: #555; }
+        #info { font-size: 1.2em; margin: 10px; font-family: monospace; color: #0f0; }
+        input { padding: 8px; width: 200px; background: #111; color: #ccc; border: 1px solid #444; }
+    </style>
 </head>
 <body>
     <div class="controls">
         <h1>GA 鬼ごっこシミュレーター</h1>
+        <div id="info">世代: 0 | 待機中</div>
         <button id="startBtn">シミュレーション開始</button>
         <button id="playerChaserBtn">鬼として参戦</button>
         <button id="playerEvaderBtn">逃走者として参戦</button>
-        <div class="io-section">
+        <div>
+            <input type="text" id="ioField" placeholder="JSONデータ">
             <button id="exportBtn">データ出力</button>
-            <input type="text" id="ioField" placeholder="JSONデータをここに貼り付け">
             <button id="importBtn">データ読込</button>
         </div>
-        <div id="info">世代: 0 | 残り時間: 10.0s</div>
     </div>
     <div id="container"></div>
 
-    <script src="script.js"></script>
+    <script>
+    // --- 定数 ---
+    const ROOM_SIZE = 200;
+    const SIM_COUNT = 25;
+    const DURATION_SEC = 10;
+    const FPS = 30;
+    const TOTAL_FRAMES = DURATION_SEC * FPS;
+    const DNA_LENGTH = 21; 
+
+    // --- クラス定義 ---
+    class Agent {
+        constructor(x, y, dna) {
+            this.x = x; this.y = y;
+            this.angle = Math.random() * Math.PI * 2;
+            this.warpCooldown = 0;
+            this.dna = dna || Array.from({ length: DNA_LENGTH }, () => Math.random() * 2 - 1);
+            this.score = 0;
+            this.isAlive = true;
+        }
+    }
+
+    class Simulation {
+        constructor(container, chaserDNA, evaderDNA) {
+            this.canvas = document.createElement('canvas');
+            this.canvas.width = ROOM_SIZE;
+            this.canvas.height = ROOM_SIZE;
+            container.appendChild(this.canvas);
+            this.ctx = this.canvas.getContext('2d');
+            this.chaser = new Agent(15, 15, chaserDNA);
+            this.evader = new Agent(185, 185, evaderDNA);
+            this.frame = 0;
+            this.isPlayerMode = false;
+            this.playerRole = null;
+        }
+
+        update(keys) {
+            if (!this.chaser.isAlive || this.frame >= TOTAL_FRAMES) return;
+
+            [this.chaser, this.evader].forEach((ent, idx) => {
+                const isChaser = idx === 0;
+                const target = isChaser ? this.evader : this.chaser;
+                let moveCmd = { angle: 0, move: true, warp: false };
+
+                if (this.isPlayerMode && this.playerRole === (isChaser ? 'chaser' : 'evader')) {
+                    if (keys.has('a')) ent.angle -= 0.15;
+                    if (keys.has('d')) ent.angle += 0.15;
+                    moveCmd.move = keys.has('w');
+                    moveCmd.warp = keys.has(' ');
+                } else {
+                    const inputs = [ent.x/200, ent.y/200, target.x/200, target.y/200, ent.angle/(Math.PI*2), ent.warpCooldown === 0 ? 1 : 0, (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES];
+                    let outputs = [0, 0, 0];
+                    for(let i=0; i<3; i++) {
+                        for(let j=0; j<7; j++) outputs[i] += inputs[j] * ent.dna[i*7 + j];
+                    }
+                    ent.angle += Math.max(-0.2, Math.min(0.2, outputs[0]));
+                    moveCmd.move = outputs[1] > 0;
+                    moveCmd.warp = outputs[2] > 0.8;
+                }
+
+                if (moveCmd.move) {
+                    ent.x += Math.cos(ent.angle) * 4;
+                    ent.y += Math.sin(ent.angle) * 4;
+                }
+                if (moveCmd.warp && ent.warpCooldown === 0) {
+                    ent.x += Math.cos(ent.angle) * 40;
+                    ent.y += Math.sin(ent.angle) * 40;
+                    ent.warpCooldown = 45;
+                }
+
+                ent.x = Math.max(0, Math.min(ROOM_SIZE, ent.x));
+                ent.y = Math.max(0, Math.min(ROOM_SIZE, ent.y));
+                if (ent.warpCooldown > 0) ent.warpCooldown--;
+            });
+
+            const dist = Math.hypot(this.chaser.x - this.evader.x, this.chaser.y - this.evader.y);
+            if (dist < 10) {
+                this.chaser.isAlive = false;
+                this.chaser.score = 2000 + (TOTAL_FRAMES - this.frame);
+                this.evader.score = this.frame;
+            }
+            this.frame++;
+            if (this.frame >= TOTAL_FRAMES && this.chaser.isAlive) {
+                this.chaser.score = Math.max(0, 500 - dist);
+                this.evader.score = 1000 + dist;
+            }
+            this.draw();
+        }
+
+        draw() {
+            const ctx = this.ctx;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, ROOM_SIZE, ROOM_SIZE);
+            // 鬼: 赤, 逃げ: 水色
+            ctx.fillStyle = 'red';
+            ctx.fillRect(this.chaser.x-4, this.chaser.y-4, 8, 8);
+            ctx.fillStyle = '#0ff';
+            ctx.fillRect(this.evader.x-4, this.evader.y-4, 8, 8);
+        }
+    }
+
+    // --- 管理ロジック ---
+    let simulations = [];
+    let generation = 0;
+    const keys = new Set();
+    const container = document.getElementById('container');
+    const infoDisp = document.getElementById('info');
+
+    window.addEventListener('keydown', e => keys.add(e.key.toLowerCase()));
+    window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+    function startGeneration() {
+        const oldSims = [...simulations];
+        let nextChaserDNAs = [];
+        let nextEvaderDNAs = [];
+
+        if (oldSims.length > 0) {
+            const sortedC = oldSims.map(s => s.chaser).sort((a,b) => b.score - a.score);
+            const sortedE = oldSims.map(s => s.evader).sort((a,b) => b.score - a.score);
+            for(let i=0; i<SIM_COUNT; i++) {
+                // 上位5体からランダムに選び突然変異
+                const pC = sortedC[Math.floor(Math.random()*5)].dna;
+                const pE = sortedE[Math.floor(Math.random()*5)].dna;
+                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.2 - 0.1)));
+                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.2 - 0.1)));
+            }
+        }
+
+        container.innerHTML = '';
+        simulations = [];
+        for (let i = 0; i < SIM_COUNT; i++) {
+            simulations.push(new Simulation(container, nextChaserDNAs[i], nextEvaderDNAs[i]));
+        }
+        generation++;
+    }
+
+    function loop() {
+        if (simulations.length > 0) {
+            simulations.forEach(sim => sim.update(keys));
+            const main = simulations[0];
+            infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s`;
+
+            if (simulations.every(s => s.frame >= TOTAL_FRAMES || !s.chaser.isAlive)) {
+                if (!simulations[0].isPlayerMode) startGeneration();
+                else infoDisp.innerText = `世代: ${generation} | ゲーム終了 (再開するには開始ボタン)`;
+            }
+        }
+        requestAnimationFrame(loop);
+    }
+
+    // ボタンのイベント
+    document.getElementById('startBtn').onclick = () => {
+        generation = 0;
+        startGeneration();
+    };
+
+    document.getElementById('playerChaserBtn').onclick = () => {
+        startGeneration();
+        simulations[0].isPlayerMode = true;
+        simulations[0].playerRole = 'chaser';
+        simulations[0].canvas.style.border = "2px solid #fff";
+    };
+
+    document.getElementById('playerEvaderBtn').onclick = () => {
+        startGeneration();
+        simulations[0].isPlayerMode = true;
+        simulations[0].playerRole = 'evader';
+        simulations[0].canvas.style.border = "2px solid #fff";
+    };
+
+    document.getElementById('exportBtn').onclick = () => {
+        if (simulations.length === 0) return;
+        const data = { c: simulations[0].chaser.dna, e: simulations[0].evader.dna };
+        document.getElementById('ioField').value = JSON.stringify(data);
+    };
+
+    document.getElementById('importBtn').onclick = () => {
+        const val = document.getElementById('ioField').value;
+        if(!val) return;
+        const data = JSON.parse(val);
+        startGeneration();
+        simulations.forEach(s => {
+            s.chaser.dna = [...data.c];
+            s.evader.dna = [...data.e];
+        });
+    };
+
+    loop();
+    </script>
 </body>
 </html>
