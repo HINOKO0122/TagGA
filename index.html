@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>GA Tag Simulation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="controls">
+        <h1>GA 鬼ごっこシミュレーター</h1>
+        <button id="startBtn">シミュレーション開始</button>
+        <button id="playerChaserBtn">鬼として参戦</button>
+        <button id="playerEvaderBtn">逃走者として参戦</button>
+        <div class="io-section">
+            <button id="exportBtn">データ出力</button>
+            <input type="text" id="ioField" placeholder="JSONデータをここに貼り付け">
+            <button id="importBtn">データ読込</button>
+        </div>
+        <div id="info">世代: 0 | 残り時間: 10.0s</div>
+    </div>
+    <div id="container"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>
