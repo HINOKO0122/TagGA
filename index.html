@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>GA Tag Simulation - Enhanced</title>
+    <title>GA Tag Simulation - High Warp Version</title>
     <style>
         body { background: #222; color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; }
         .controls { padding: 20px; text-align: center; background: #333; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
@@ -16,7 +16,7 @@
 </head>
 <body>
     <div class="controls">
-        <h1>GA 鬼ごっこシミュレーター (常時移動ver)</h1>
+        <h1>GA 鬼ごっこ (ワープ強化ver)</h1>
         <div id="info">世代: 0 | 待機中</div>
         <button id="startBtn">リセットして開始</button>
         <button id="playerChaserBtn">鬼として参戦</button>
@@ -45,7 +45,7 @@
             this.dna = dna || Array.from({ length: DNA_LENGTH }, () => Math.random() * 2 - 1);
             this.score = 0;
             this.isAlive = true;
-            this.lastWarp = null; // ワープ軌跡保存用
+            this.warpLines = []; // ワープ軌跡を複数保持できるように
         }
     }
 
@@ -70,36 +70,46 @@
                 const isChaser = idx === 0;
                 const target = isChaser ? this.evader : this.chaser;
                 let moveCmd = { angleVel: 0, warp: false };
-                ent.lastWarp = null; // 毎フレーム初期化
+
+                // ワープ軌跡の寿命を減らす
+                ent.warpLines = ent.warpLines.filter(line => {
+                    line.life--;
+                    return line.life > 0;
+                });
 
                 if (this.isPlayerMode && this.playerRole === (isChaser ? 'chaser' : 'evader')) {
-                    if (keys.has('a')) moveCmd.angleVel = -0.2;
-                    if (keys.has('d')) moveCmd.angleVel = 0.2;
+                    if (keys.has('a')) moveCmd.angleVel = -0.25;
+                    if (keys.has('d')) moveCmd.angleVel = 0.25;
                     moveCmd.warp = keys.has(' ');
                 } else {
-                    const inputs = [ent.x/200, ent.y/200, target.x/200, target.y/200, Math.cos(ent.angle), ent.warpCooldown === 0 ? 1 : 0, (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES];
+                    const inputs = [
+                        ent.x/200, ent.y/200, 
+                        target.x/200, target.y/200, 
+                        Math.cos(ent.angle), 
+                        ent.warpCooldown === 0 ? 1 : 0, 
+                        (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES
+                    ];
                     let outputs = [0, 0, 0];
                     for(let i=0; i<3; i++) {
                         for(let j=0; j<7; j++) outputs[i] += inputs[j] * ent.dna[i*7 + j];
                     }
-                    moveCmd.angleVel = Math.max(-0.2, Math.min(0.2, outputs[0]));
-                    moveCmd.warp = outputs[2] > 0.8;
+                    moveCmd.angleVel = Math.max(-0.25, Math.min(0.25, outputs[0]));
+                    // ワープ判定を甘く (0.8 -> 0.5)
+                    moveCmd.warp = outputs[2] > 0.5;
                 }
 
-                // 常時前進（動かない選択肢を消去）
                 ent.angle += moveCmd.angleVel;
-                const speed = 4;
                 
                 if (moveCmd.warp && ent.warpCooldown === 0) {
                     const oldX = ent.x;
                     const oldY = ent.y;
-                    ent.x += Math.cos(ent.angle) * 50;
-                    ent.y += Math.sin(ent.angle) * 50;
-                    ent.warpCooldown = 40;
-                    ent.lastWarp = { x1: oldX, y1: oldY, x2: ent.x, y2: ent.y };
+                    ent.x += Math.cos(ent.angle) * 60; // 飛距離アップ
+                    ent.y += Math.sin(ent.angle) * 60;
+                    ent.warpCooldown = 20; // クールダウン短縮
+                    ent.warpLines.push({ x1: oldX, y1: oldY, x2: ent.x, y2: ent.y, life: 30 });
                 } else {
-                    ent.x += Math.cos(ent.angle) * speed;
-                    ent.y += Math.sin(ent.angle) * speed;
+                    ent.x += Math.cos(ent.angle) * 4.5;
+                    ent.y += Math.sin(ent.angle) * 4.5;
                 }
 
                 ent.x = Math.max(0, Math.min(ROOM_SIZE, ent.x));
@@ -110,7 +120,7 @@
             const dist = Math.hypot(this.chaser.x - this.evader.x, this.chaser.y - this.evader.y);
             if (dist < 10) {
                 this.chaser.isAlive = false;
-                this.chaser.score = 2000 + (TOTAL_FRAMES - this.frame);
+                this.chaser.score = 3000 + (TOTAL_FRAMES - this.frame);
                 this.evader.score = this.frame;
             }
             this.frame++;
@@ -126,26 +136,30 @@
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, ROOM_SIZE, ROOM_SIZE);
 
-            // ワープの道筋を描画
-            [this.chaser, this.evader].forEach(ent => {
-                if (ent.lastWarp) {
+            [this.chaser, this.evader].forEach((ent, idx) => {
+                const color = idx === 0 ? 'red' : '#0ff';
+                ent.warpLines.forEach(line => {
                     ctx.beginPath();
-                    ctx.strokeStyle = 'yellow';
+                    ctx.strokeStyle = `rgba(255, 255, 0, ${line.life / 30})`; // 徐々に消える
                     ctx.lineWidth = 2;
-                    ctx.moveTo(ent.lastWarp.x1, ent.lastWarp.y1);
-                    ctx.lineTo(ent.lastWarp.x2, ent.lastWarp.y2);
+                    ctx.moveTo(line.x1, line.y1);
+                    ctx.lineTo(line.x2, line.y2);
                     ctx.stroke();
+                });
+
+                ctx.fillStyle = color;
+                ctx.fillRect(ent.x-4, ent.y-4, 8, 8);
+                
+                // ワープ可能時はオーラを表示
+                if (ent.warpCooldown === 0) {
+                    ctx.strokeStyle = color;
+                    ctx.strokeRect(ent.x-6, ent.y-6, 12, 12);
                 }
             });
 
-            // 鬼: 赤, 逃げ: 水色
-            ctx.fillStyle = 'red';
-            ctx.fillRect(this.chaser.x-4, this.chaser.y-4, 8, 8);
-            ctx.fillStyle = '#0ff';
-            ctx.fillRect(this.evader.x-4, this.evader.y-4, 8, 8);
-
             if (!this.chaser.isAlive) {
                 ctx.strokeStyle = 'white';
+                ctx.lineWidth = 1;
                 ctx.strokeRect(0,0, ROOM_SIZE, ROOM_SIZE);
             }
         }
@@ -170,8 +184,8 @@
             for(let i=0; i<SIM_COUNT; i++) {
                 const pC = sortedC[Math.floor(Math.random()*5)].dna;
                 const pE = sortedE[Math.floor(Math.random()*5)].dna;
-                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.3 - 0.15)));
-                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.3 - 0.15)));
+                nextChaserDNAs.push(pC.map(v => v + (Math.random()*0.4 - 0.2)));
+                nextEvaderDNAs.push(pE.map(v => v + (Math.random()*0.4 - 0.2)));
             }
             generation++;
         } else {
@@ -192,38 +206,31 @@
             infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s`;
 
             if (simulations.every(s => s.frame >= TOTAL_FRAMES || !s.chaser.isAlive)) {
-                if (!simulations[0].isPlayerMode) {
-                    startGeneration();
-                } else {
-                    infoDisp.innerText = `世代: ${generation} | ゲーム終了 (リセットボタンで再開)`;
-                }
+                if (!simulations[0].isPlayerMode) startGeneration();
+                else infoDisp.innerText = `世代: ${generation} | ゲーム終了 (リセットで再開)`;
             }
         }
         requestAnimationFrame(loop);
     }
 
     document.getElementById('startBtn').onclick = () => startGeneration(true);
-    
     document.getElementById('playerChaserBtn').onclick = () => {
         startGeneration(false);
         simulations[0].isPlayerMode = true;
         simulations[0].playerRole = 'chaser';
-        simulations[0].canvas.style.border = "2px solid red";
+        simulations[0].canvas.style.outline = "2px solid red";
     };
-
     document.getElementById('playerEvaderBtn').onclick = () => {
         startGeneration(false);
         simulations[0].isPlayerMode = true;
         simulations[0].playerRole = 'evader';
-        simulations[0].canvas.style.border = "2px solid #0ff";
+        simulations[0].canvas.style.outline = "2px solid #0ff";
     };
-
     document.getElementById('exportBtn').onclick = () => {
         if (simulations.length === 0) return;
         const data = { c: simulations[0].chaser.dna, e: simulations[0].evader.dna };
         document.getElementById('ioField').value = JSON.stringify(data);
     };
-
     document.getElementById('importBtn').onclick = () => {
         const val = document.getElementById('ioField').value;
         if(!val) return;
@@ -235,7 +242,6 @@
         });
     };
 
-    // 初期起動
     startGeneration(true);
     loop();
     </script>
