@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>GA Tag Simulation - Mode Switch</title>
+    <title>GA Tag Simulation - Logic Move Version</title>
     <style>
         body { background: #222; color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; overflow: hidden; }
         .controls { padding: 20px; text-align: center; background: #333; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); z-index: 10; }
@@ -11,17 +11,16 @@
         button { cursor: pointer; padding: 8px 15px; margin: 5px; background: #444; color: white; border: 1px solid #666; border-radius: 4px; }
         button:focus { outline: none; }
         #info { font-size: 1.2em; margin: 10px; font-family: monospace; color: #0f0; }
-        .active-btn { background: #060; border-color: #0f0; } /* 参戦中のボタン強調 */
     </style>
 </head>
 <body>
     <div class="controls">
-        <h1>GA 鬼ごっこ (モード切替版)</h1>
+        <h1>GA 鬼ごっこ (移動ロジック固定・ワープのみ進化)</h1>
         <div id="info">世代: 0 | 待機中</div>
         <button id="startBtn">リセットして開始</button>
         <button id="playerChaserBtn">鬼として参戦</button>
         <button id="playerEvaderBtn">逃走者として参戦</button>
-        <button id="cancelPlayerBtn" style="background: #622;">参戦解除 (AIに戻す)</button>
+        <button id="cancelPlayerBtn" style="background: #622;">参戦解除</button>
     </div>
     <div id="container"></div>
 
@@ -31,16 +30,16 @@
     const DURATION_SEC = 10;
     const FPS = 30;
     const TOTAL_FRAMES = DURATION_SEC * FPS;
-    const DNA_LENGTH = 10 * 4; 
+    // DNAはワープ判断用（入力10に対する重み1セットのみ）
+    const DNA_LENGTH = 10; 
 
-    // グローバルな状態管理
     let isPlayerMode = false;
     let playerRole = null;
 
     class Agent {
         constructor(x, y, dna) {
             this.x = x; this.y = y;
-            this.dirIndex = Math.floor(Math.random() * 4);
+            this.dirIndex = 0; // 0:右, 1:下, 2:左, 3:上
             this.warpCooldown = 0;
             this.dna = dna || Array.from({ length: DNA_LENGTH }, () => Math.random() * 2 - 1);
             this.score = 0;
@@ -57,11 +56,37 @@
             this.canvas.height = ROOM_SIZE;
             container.appendChild(this.canvas);
             this.ctx = this.canvas.getContext('2d');
-            this.isMain = isMain; // プレイヤーが操作する可能性がある部屋か
-            
+            this.isMain = isMain;
             this.chaser = new Agent(Math.random()*180+10, Math.random()*180+10, chaserDNA);
             this.evader = new Agent(Math.random()*180+10, Math.random()*180+10, evaderDNA);
             this.frame = 0;
+        }
+
+        // --- ロジックに基づいた移動方向の決定 ---
+        getLogicalDir(ent, target, isChaser) {
+            const dx = target.x - ent.x;
+            const dy = target.y - ent.y;
+            
+            let preferredDirs = [];
+            if (isChaser) {
+                // 鬼：近づく方向を優先
+                if (Math.abs(dx) > Math.abs(dy)) preferredDirs = dx > 0 ? [0, 1, 3, 2] : [2, 1, 3, 0];
+                else preferredDirs = dy > 0 ? [1, 0, 2, 3] : [3, 0, 2, 1];
+            } else {
+                // 逃走者：遠ざかる方向を優先
+                if (Math.abs(dx) > Math.abs(dy)) preferredDirs = dx > 0 ? [2, 1, 3, 0] : [0, 1, 3, 2];
+                else preferredDirs = dy > 0 ? [3, 0, 2, 1] : [1, 0, 2, 3];
+            }
+
+            // 壁にぶつかる場合は次の候補を選ぶ（壁伝い移動）
+            for (let dir of preferredDirs) {
+                let nextX = ent.x + Math.cos(dir * Math.PI/2) * 10;
+                let nextY = ent.y + Math.sin(dir * Math.PI/2) * 10;
+                if (nextX > 5 && nextX < ROOM_SIZE-5 && nextY > 5 && nextY < ROOM_SIZE-5) {
+                    return dir;
+                }
+            }
+            return preferredDirs[0];
         }
 
         update(keys) {
@@ -70,44 +95,43 @@
             [this.chaser, this.evader].forEach((ent, idx) => {
                 const isChaser = idx === 0;
                 const target = isChaser ? this.evader : this.chaser;
-                let moveCmd = { newDir: ent.dirIndex, warp: false };
+                let doWarp = false;
 
                 ent.warpLines = ent.warpLines.filter(line => { line.life--; return line.life > 0; });
 
-                // プレイヤー操作の判定
+                // 移動方向の決定（ロジック）
                 if (this.isMain && isPlayerMode && playerRole === (isChaser ? 'chaser' : 'evader')) {
-                    if (keys.has('arrowright') || keys.has('d')) moveCmd.newDir = 0;
-                    else if (keys.has('arrowdown') || keys.has('s')) moveCmd.newDir = 1;
-                    else if (keys.has('arrowleft') || keys.has('a')) moveCmd.newDir = 2;
-                    else if (keys.has('arrowup') || keys.has('w')) moveCmd.newDir = 3;
-                    if (keys.has(' ')) moveCmd.warp = true;
+                    if (keys.has('arrowright') || keys.has('d')) ent.dirIndex = 0;
+                    else if (keys.has('arrowdown') || keys.has('s')) ent.dirIndex = 1;
+                    else if (keys.has('arrowleft') || keys.has('a')) ent.dirIndex = 2;
+                    else if (keys.has('arrowup') || keys.has('w')) ent.dirIndex = 3;
+                    if (keys.has(' ')) doWarp = true;
                 } else {
-                    // AI操作
+                    ent.dirIndex = this.getLogicalDir(ent, target, isChaser);
+                    
+                    // AIはワープするかどうかだけを考える
                     const dirFlags = [0,0,0,0]; dirFlags[ent.dirIndex] = 1;
                     const inputs = [
                         ent.x/200, ent.y/200, target.x/200, target.y/200, 
                         ...dirFlags, ent.warpCooldown === 0 ? 1 : 0, (TOTAL_FRAMES-this.frame)/TOTAL_FRAMES
                     ];
-                    let outputs = [0, 0, 0, 0];
-                    for(let i=0; i<4; i++) {
-                        for(let j=0; j<10; j++) outputs[i] += inputs[j] * ent.dna[i*10 + j];
-                    }
-                    moveCmd.newDir = outputs.indexOf(Math.max(...outputs.slice(0, 4)));
-                    moveCmd.warp = outputs.reduce((a,b)=>a+b) > 2.5; 
+                    let score = 0;
+                    for(let j=0; j<10; j++) score += inputs[j] * ent.dna[j];
+                    if (score > 1.5) doWarp = true;
                 }
 
-                ent.dirIndex = moveCmd.newDir;
                 const speed = 5;
-                if (moveCmd.warp && ent.warpCooldown === 0) {
+                if (doWarp && ent.warpCooldown === 0) {
                     const oldX = ent.x; const oldY = ent.y;
-                    ent.x += Math.cos(ent.angle) * 60;
-                    ent.y += Math.sin(ent.angle) * 60;
-                    ent.warpCooldown = 25;
+                    ent.x += Math.cos(ent.angle) * 70;
+                    ent.y += Math.sin(ent.angle) * 70;
+                    ent.warpCooldown = 30;
                     ent.warpLines.push({ x1: oldX, y1: oldY, x2: ent.x, y2: ent.y, life: 20 });
                 } else {
                     ent.x += Math.cos(ent.angle) * speed;
                     ent.y += Math.sin(ent.angle) * speed;
                 }
+
                 ent.x = Math.max(5, Math.min(ROOM_SIZE-5, ent.x));
                 ent.y = Math.max(5, Math.min(ROOM_SIZE-5, ent.y));
                 if (ent.warpCooldown > 0) ent.warpCooldown--;
@@ -148,16 +172,15 @@
                 ctx.save();
                 ctx.translate(ent.x, ent.y);
                 ctx.rotate(ent.angle);
-                ctx.fillRect(-5, -5, 12, 10);
+                ctx.fillRect(-5, -5, 14, 10); // 進行方向をわかりやすく
                 if (ent.warpCooldown === 0) {
                     ctx.strokeStyle = 'white';
-                    ctx.strokeRect(-7, -7, 14, 14);
+                    ctx.strokeRect(-7, -7, 18, 14);
                 }
                 ctx.restore();
             });
             if (!this.chaser.isAlive) {
-                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-                ctx.lineWidth = 1;
+                ctx.strokeStyle = 'rgba(255,255,255,0.3)';
                 ctx.strokeRect(0,0, ROOM_SIZE, ROOM_SIZE);
             }
         }
@@ -205,37 +228,18 @@
             simulations.forEach(sim => sim.update(keys));
             const main = simulations[0];
             infoDisp.innerText = `世代: ${generation} | 残り時間: ${(Math.max(0, (TOTAL_FRAMES-main.frame)/FPS)).toFixed(1)}s ${isPlayerMode ? '(参戦中)' : ''}`;
-            
             if (simulations.every(s => s.frame >= TOTAL_FRAMES || !s.chaser.isAlive)) {
-                startGeneration(); // 参戦中であっても、終われば次の世代へ自動移行
+                startGeneration();
             }
         }
         requestAnimationFrame(loop);
     }
 
-    document.querySelectorAll('button').forEach(btn => {
-        btn.addEventListener('click', () => btn.blur());
-    });
-
-    document.getElementById('startBtn').onclick = () => {
-        isPlayerMode = false;
-        startGeneration(true);
-    };
-
-    document.getElementById('playerChaserBtn').onclick = () => {
-        isPlayerMode = true;
-        playerRole = 'chaser';
-    };
-
-    document.getElementById('playerEvaderBtn').onclick = () => {
-        isPlayerMode = true;
-        playerRole = 'evader';
-    };
-
-    document.getElementById('cancelPlayerBtn').onclick = () => {
-        isPlayerMode = false;
-        playerRole = null;
-    };
+    document.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => btn.blur()));
+    document.getElementById('startBtn').onclick = () => { isPlayerMode = false; startGeneration(true); };
+    document.getElementById('playerChaserBtn').onclick = () => { isPlayerMode = true; playerRole = 'chaser'; };
+    document.getElementById('playerEvaderBtn').onclick = () => { isPlayerMode = true; playerRole = 'evader'; };
+    document.getElementById('cancelPlayerBtn').onclick = () => { isPlayerMode = false; playerRole = null; };
 
     startGeneration(true);
     loop();
